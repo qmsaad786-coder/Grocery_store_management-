@@ -1,0 +1,297 @@
+-- =========================================
+--  DATABASE SETUP
+-- =========================================
+CREATE DATABASE IF NOT EXISTS SalesDB;
+USE SalesDB;
+
+-- =========================================
+--  TABLE CREATION
+-- =========================================
+
+-- 1. Supplier Table
+CREATE TABLE IF NOT EXISTS supplier (
+    sup_id TINYINT PRIMARY KEY,
+    sup_name VARCHAR(255),
+    address TEXT
+);
+
+-- 2️. Categories Table
+CREATE TABLE IF NOT EXISTS categories (
+    cat_id TINYINT PRIMARY KEY,
+    cat_name VARCHAR(255)
+);
+
+-- 3️. Employees Table
+-- Using VARCHAR for hire_date for CSV import safety
+CREATE TABLE IF NOT EXISTS employees (
+    emp_id TINYINT PRIMARY KEY,
+    emp_name VARCHAR(255),
+    hire_date VARCHAR(255)
+);
+
+-- 4️. Customers Table
+CREATE TABLE IF NOT EXISTS customers (
+    cust_id SMALLINT PRIMARY KEY,
+    cust_name VARCHAR(255),
+    address TEXT
+);
+
+-- 5️. Products Table
+CREATE TABLE IF NOT EXISTS products (
+    prod_id TINYINT PRIMARY KEY,
+    prod_name VARCHAR(255),
+    sup_id TINYINT,
+    cat_id TINYINT,
+    price DECIMAL(10,2),
+    FOREIGN KEY (sup_id) REFERENCES supplier(sup_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (cat_id) REFERENCES categories(cat_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+-- 6️. Orders Table
+-- order_date kept as VARCHAR for flexible CSV import
+CREATE TABLE IF NOT EXISTS orders (
+    ord_id SMALLINT PRIMARY KEY,
+    cust_id SMALLINT,
+    emp_id TINYINT,
+    order_date VARCHAR(255),
+    FOREIGN KEY (cust_id) REFERENCES customers(cust_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (emp_id) REFERENCES employees(emp_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+-- 7️. Order_Details Table
+CREATE TABLE IF NOT EXISTS order_details (
+    ord_detID SMALLINT AUTO_INCREMENT PRIMARY KEY,
+    ord_id SMALLINT,
+    prod_id TINYINT,
+    quantity TINYINT,
+    each_price DECIMAL(10,2),
+    total_price DECIMAL(10,2),
+    FOREIGN KEY (ord_id) REFERENCES orders(ord_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (prod_id) REFERENCES products(prod_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+-- =========================================
+--  DATE CONVERSION AFTER CSV IMPORT
+-- =========================================
+-- For Employees and Orders Table 
+-- (assumes MM/DD/YYYY format like '2/3/2021')
+
+SET SQL_SAFE_UPDATES = 0;
+
+-- For Employees
+ALTER TABLE employees ADD COLUMN hire_date_fmt DATE;
+UPDATE employees SET hire_date_fmt = STR_TO_DATE(hire_date, '%m/%d/%Y');
+ALTER TABLE employees DROP COLUMN hire_date;
+ALTER TABLE employees CHANGE COLUMN hire_date_fmt hire_date DATE;
+
+-- For Orders
+ALTER TABLE orders ADD COLUMN order_date_fmt DATE;
+UPDATE orders
+SET order_date_fmt = 
+    CASE
+        WHEN order_date LIKE '%/%/%' THEN STR_TO_DATE(order_date, '%m/%d/%Y')
+        WHEN order_date LIKE '%-%-%' THEN STR_TO_DATE(order_date, '%d-%m-%y')
+        ELSE NULL
+    END;
+ALTER TABLE orders DROP COLUMN order_date;
+ALTER TABLE orders CHANGE COLUMN order_date_fmt order_date DATE;
+
+-- =========================================
+--  SQL ANALYSIS SECTION
+-- =========================================
+
+-- ===========================
+-- 1️. CUSTOMER INSIGHTS
+-- ===========================
+
+-- (1) How many unique customers have placed orders?
+SELECT COUNT(DISTINCT cust_id) AS Unique_Customers FROM orders;
+
+-- (2) Which customers have placed the highest number of orders?
+SELECT c.cust_id, c.cust_name, COUNT(o.ord_id) AS Total_Orders
+FROM customers c
+JOIN orders o ON c.cust_id = o.cust_id
+GROUP BY c.cust_id, c.cust_name
+ORDER BY Total_Orders DESC;
+
+-- (3) What is the total and average purchase value per customer?
+SELECT c.cust_id, c.cust_name, 
+       SUM(od.total_price) AS Total_Purchase, 
+       AVG(od.total_price) AS Avg_Purchase
+FROM customers c
+JOIN orders o ON c.cust_id = o.cust_id
+JOIN order_details od ON o.ord_id = od.ord_id
+GROUP BY c.cust_id, c.cust_name;
+
+-- (4) Top 5 customers by total purchase amount
+SELECT c.cust_id, c.cust_name, SUM(od.total_price) AS Total_Purchase
+FROM customers c
+JOIN orders o ON c.cust_id = o.cust_id
+JOIN order_details od ON o.ord_id = od.ord_id
+GROUP BY c.cust_id, c.cust_name
+ORDER BY Total_Purchase DESC
+LIMIT 5;
+
+-- ===========================
+-- 2️. PRODUCT PERFORMANCE
+-- ===========================
+
+-- (1) Number of products in each category
+SELECT cat.cat_name, COUNT(p.prod_id) AS Product_Count
+FROM products p
+JOIN categories cat ON p.cat_id = cat.cat_id
+GROUP BY cat.cat_name;
+
+-- (2) Average price of products by category
+SELECT cat.cat_name, AVG(p.price) AS Avg_Price
+FROM products p
+JOIN categories cat ON p.cat_id = cat.cat_id
+GROUP BY cat.cat_name;
+
+-- (3) Products with the highest total sales volume
+SELECT p.prod_id, p.prod_name, SUM(od.quantity) AS Total_Quantity
+FROM products p
+JOIN order_details od ON p.prod_id = od.prod_id
+GROUP BY p.prod_id, p.prod_name
+ORDER BY Total_Quantity DESC;
+
+-- (4) Total revenue generated by each product
+SELECT p.prod_id, p.prod_name, SUM(od.total_price) AS Total_Revenue
+FROM products p
+JOIN order_details od ON p.prod_id = od.prod_id
+GROUP BY p.prod_id, p.prod_name
+ORDER BY Total_Revenue DESC;
+
+-- (5) Product sales by category and supplier
+SELECT cat.cat_name, s.sup_name, p.prod_name, SUM(od.total_price) AS Revenue
+FROM products p
+JOIN categories cat ON p.cat_id = cat.cat_id
+JOIN supplier s ON p.sup_id = s.sup_id
+JOIN order_details od ON p.prod_id = od.prod_id
+GROUP BY cat.cat_name, s.sup_name, p.prod_name
+ORDER BY Revenue DESC;
+
+-- ===========================
+-- 3️. SALES AND ORDER TRENDS
+-- ===========================
+
+-- (1) Total number of orders
+SELECT COUNT(*) AS Total_Orders FROM orders;
+
+-- (2) Average value per order
+SELECT o.ord_id, SUM(od.total_price) AS Order_Value
+FROM orders o
+JOIN order_details od ON o.ord_id = od.ord_id
+GROUP BY o.ord_id;
+
+-- (3) Dates with most orders
+SELECT order_date, COUNT(ord_id) AS Orders_Count
+FROM orders
+GROUP BY order_date
+ORDER BY Orders_Count DESC;
+
+-- (4) Monthly trends in order volume and revenue
+SELECT DATE_FORMAT(order_date, '%Y-%m') AS Month,
+       COUNT(DISTINCT o.ord_id) AS Orders_Count,
+       SUM(od.total_price) AS Revenue
+FROM orders o
+JOIN order_details od ON o.ord_id = od.ord_id
+GROUP BY Month
+ORDER BY Month;
+
+-- (5) Order patterns across weekdays and weekends
+--  Weekday vs Weekend Order Volume
+SELECT 
+    CASE 
+        WHEN DAYOFWEEK(order_date) IN (1,7) THEN 'Weekend'   -- Sunday=1, Saturday=7
+        ELSE 'Weekday'
+    END AS Day_Type,
+    COUNT(ord_id) AS Orders_Count
+FROM orders
+GROUP BY Day_Type;
+
+-- ===========================
+-- 4️. SUPPLIER CONTRIBUTION
+-- ===========================
+
+-- (1) Total suppliers count
+SELECT COUNT(*) AS Supplier_Count FROM supplier;
+
+-- (2) Supplier providing most products
+SELECT s.sup_id, s.sup_name, COUNT(p.prod_id) AS Product_Count
+FROM supplier s
+JOIN products p ON s.sup_id = p.sup_id
+GROUP BY s.sup_id, s.sup_name
+ORDER BY Product_Count DESC;
+
+-- (3) Average price of products by supplier
+SELECT s.sup_id, s.sup_name, AVG(p.price) AS Avg_Price
+FROM supplier s
+JOIN products p ON s.sup_id = p.sup_id
+GROUP BY s.sup_id, s.sup_name;
+
+-- (4) Suppliers contributing most to total sales (by revenue)
+SELECT s.sup_id, s.sup_name, SUM(od.total_price) AS Total_Revenue
+FROM supplier s
+JOIN products p ON s.sup_id = p.sup_id
+JOIN order_details od ON p.prod_id = od.prod_id
+GROUP BY s.sup_id, s.sup_name
+ORDER BY Total_Revenue DESC;
+
+-- ===========================
+-- 5️. EMPLOYEE PERFORMANCE
+-- ===========================
+
+-- (1) How many employees processed orders
+SELECT COUNT(DISTINCT emp_id) AS Employee_Count FROM orders WHERE emp_id IS NOT NULL;
+
+-- (2) Employees handling the most orders
+SELECT e.emp_id, e.emp_name, COUNT(o.ord_id) AS Orders_Handled
+FROM employees e
+JOIN orders o ON e.emp_id = o.emp_id
+GROUP BY e.emp_id, e.emp_name
+ORDER BY Orders_Handled DESC;
+
+-- (3) Total sales handled per employee
+SELECT e.emp_id, e.emp_name, SUM(od.total_price) AS Total_Sales
+FROM employees e
+JOIN orders o ON e.emp_id = o.emp_id
+JOIN order_details od ON o.ord_id = od.ord_id
+GROUP BY e.emp_id, e.emp_name
+ORDER BY Total_Sales DESC;
+
+-- (4) Average order value per employee
+SELECT e.emp_id, e.emp_name, AVG(OrderTotal) AS Avg_Order_Value
+FROM (
+    SELECT o.ord_id, o.emp_id, SUM(od.total_price) AS OrderTotal
+    FROM orders o
+    JOIN order_details od ON o.ord_id = od.ord_id
+    GROUP BY o.ord_id, o.emp_id
+) AS emp_orders
+JOIN employees e ON e.emp_id = emp_orders.emp_id
+GROUP BY e.emp_id, e.emp_name
+ORDER BY Avg_Order_Value DESC;
+
+-- ===========================
+-- 6️. ORDER DETAILS DEEP DIVE
+-- ===========================
+
+-- (1) Relationship between quantity and total price
+SELECT quantity, total_price FROM order_details;
+
+-- (2) Average quantity ordered per product
+SELECT p.prod_id, p.prod_name, AVG(od.quantity) AS Avg_Quantity
+FROM products p
+JOIN order_details od ON p.prod_id = od.prod_id
+GROUP BY p.prod_id, p.prod_name;
+
+-- (3) Unit price variation across products
+SELECT p.prod_id, p.prod_name, (od.total_price / od.quantity) AS Unit_Price
+FROM products p
+JOIN order_details od ON p.prod_id = od.prod_id;
